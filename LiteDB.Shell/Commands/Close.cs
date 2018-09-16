@@ -1,25 +1,26 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
+using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Close : ConsoleCommand
+    [Help(
+        Category = "Database",
+        Name = "close",
+        Syntax = "close",
+        Description = "Close current datafile"
+    )]
+    internal class Close : IShellCommand
     {
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
             return s.Scan(@"close$").Length > 0;
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            if (shell.Database == null) throw LiteException.NoDatabase();
-
-            shell.Database.Dispose();
-
-            shell.Database = null;
+            env.Close();
         }
     }
 }

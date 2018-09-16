@@ -1,21 +1,26 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Pretty : ConsoleCommand
+    [Help(
+        Category = "Shell",
+        Name = "pretty",
+        Syntax = "pretty [on|off]",
+        Description = "Print all json results with identation/break lines",
+        Examples = new string[] {
+            "pretty"
+        }
+    )]
+    internal class Pretty : IShellCommand
     {
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
             return s.Scan(@"pretty\s*").Length > 0;
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            display.Pretty = !(s.Scan(@"off\s*").Length > 0);
+            env.Display.Pretty = !(s.Scan(@"off\s*").Length > 0);
         }
     }
 }

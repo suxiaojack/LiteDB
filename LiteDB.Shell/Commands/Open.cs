@@ -1,28 +1,32 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
+using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Open : ConsoleCommand
+    [Help(
+        Category = "Database",
+        Name = "open",
+        Syntax = "open <filename|connectionString>",
+        Description = "Open (or create) a new datafile. Can be used a single filename or a connection string with all supported parameters.",
+        Examples = new string[] {
+            "open mydb.db",
+            "open filename=mydb.db; password=johndoe; initial=100Mb"
+        }
+    )]
+    internal class Open : IShellCommand
     {
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
             return s.Scan(@"open\s+").Length > 0;
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            var filename = s.Scan(@".+");
+            var connectionString = new ConnectionString(s.Scan(@".+").TrimToNull());
 
-            if (shell.Database != null)
-            {
-                shell.Database.Dispose();
-            }
-
-            shell.Database = new LiteDatabase(filename);
+            env.Open(connectionString);
         }
     }
 }

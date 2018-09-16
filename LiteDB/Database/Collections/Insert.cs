@@ -1,107 +1,107 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace LiteDB
 {
     public partial class LiteCollection<T>
     {
         /// <summary>
-        /// Insert a new document to this collection. Document Id must be a new value in collection - Returns document Id
+        /// Insert a new entity to this collection. Document Id must be a new value in collection - Returns document Id
         /// </summary>
-        public virtual BsonValue Insert(T document)
+        public BsonValue Insert(T document)
         {
-            if (document == null) throw new ArgumentNullException("document");
+            if (document == null) throw new ArgumentNullException(nameof(document));
 
-            // set an id value if document object needs
-            this.Database.Mapper.SetAutoId(document, this.GetBsonCollection());
+            var doc = _mapper.ToDocument(document);
+            var removed = this.RemoveDocId(doc);
 
-            var doc = this.Database.Mapper.ToDocument(document);
+            var id = _engine.Value.Insert(_name, doc, _autoId);
 
-            BsonValue id;
-
-            // add ObjectId to _id if _id not found
-            if (!doc.RawValue.TryGetValue("_id", out id))
+            // checks if must update _id value in entity
+            if (removed && _id != null)
             {
-                id = doc["_id"] = ObjectId.NewObjectId();
+                _id.Setter(document, id.RawValue);
             }
 
-            // test if _id is a valid type
-            if (id.IsNull || id.IsMinValue || id.IsMaxValue) throw LiteException.InvalidDataType("_id", id);
+            return id;
+        }
 
-            // serialize object
-            var bytes = BsonSerializer.Serialize(doc);
+        /// <summary>
+        /// Insert a new document to this collection using passed id value.
+        /// </summary>
+        public void Insert(BsonValue id, T document)
+        {
+            if (document == null) throw new ArgumentNullException(nameof(document));
+            if (id == null || id.IsNull) throw new ArgumentNullException(nameof(id));
 
-            this.Database.Transaction.Begin();
+            var doc = _mapper.ToDocument(document);
 
-            try
+            doc["_id"] = id;
+
+            _engine.Value.Insert(_name, doc);
+        }
+
+        /// <summary>
+        /// Insert an array of new documents to this collection. Document Id must be a new value in collection. Can be set buffer size to commit at each N documents
+        /// </summary>
+        public int Insert(IEnumerable<T> docs)
+        {
+            if (docs == null) throw new ArgumentNullException(nameof(docs));
+
+            return _engine.Value.Insert(_name, this.GetBsonDocs(docs), _autoId);
+        }
+
+        /// <summary>
+        /// Implements bulk insert documents in a collection. Usefull when need lots of documents.
+        /// </summary>
+        public int InsertBulk(IEnumerable<T> docs, int batchSize = 5000)
+        {
+            if (docs == null) throw new ArgumentNullException(nameof(docs));
+
+            return _engine.Value.InsertBulk(_name, this.GetBsonDocs(docs), batchSize, _autoId);
+        }
+
+        /// <summary>
+        /// Convert each T document in a BsonDocument, setting autoId for each one
+        /// </summary>
+        private IEnumerable<BsonDocument> GetBsonDocs(IEnumerable<T> documents)
+        {
+            foreach (var document in documents)
             {
-                var col = this.GetCollectionPage(true);
+                var doc = _mapper.ToDocument(document);
+                var removed = this.RemoveDocId(doc);
 
-                // storage in data pages - returns dataBlock address
-                var dataBlock = this.Database.Data.Insert(col, bytes);
+                yield return doc;
 
-                // store id in a PK index [0 array]
-                var pk = this.Database.Indexer.AddNode(col.PK, id);
-
-                // do links between index <-> data block
-                pk.DataBlock = dataBlock.Position;
-                dataBlock.IndexRef[0] = pk.Position;
-
-                // for each index, insert new IndexNode
-                foreach(var index in col.GetIndexes(false))
+                if (removed && _id != null)
                 {
-                    var key = doc.Get(index.Field);
-
-                    var node = this.Database.Indexer.AddNode(index, key);
-
-                    // point my index to data object
-                    node.DataBlock = dataBlock.Position;
-
-                    // point my dataBlock
-                    dataBlock.IndexRef[index.Slot] = node.Position;
+                    _id.Setter(document, doc["_id"].RawValue);
                 }
-
-                this.Database.Transaction.Commit();
-
-                return id;
-            }
-            catch
-            {
-                this.Database.Transaction.Rollback();
-                throw;
             }
         }
 
         /// <summary>
-        /// Insert an array of new documents to this collection. Document Id must be a new value in collection
+        /// Remove document _id if contains a "empty" value (checks for autoId bson type)
         /// </summary>
-        public virtual int Insert(IEnumerable<T> docs)
+        private bool RemoveDocId(BsonDocument doc)
         {
-            if (docs == null) throw new ArgumentNullException("docs");
-
-            this.Database.Transaction.Begin();
-            var count = 0;
-
-            try
+            if (doc.TryGetValue("_id", out var id)) 
             {
-                foreach (var doc in docs)
+                // check if exists _autoId and current id is "empty"
+                if ((_autoId == BsonType.ObjectId && (id.IsNull || id.AsObjectId == ObjectId.Empty)) ||
+                    (_autoId == BsonType.Guid && id.AsGuid == Guid.Empty) ||
+                    (_autoId == BsonType.DateTime && id.AsDateTime == DateTime.MinValue) ||
+                    (_autoId == BsonType.Int32 && id.AsInt32 == 0) ||
+                    (_autoId == BsonType.Int64 && id.AsInt64 == 0))
                 {
-                    this.Insert(doc);
-                    count++;
+                    // in this cases, remove _id and set new value after
+                    doc.Remove("_id");
+                    return true;
                 }
-
-                this.Database.Transaction.Commit();
-
-                return count;
             }
-            catch
-            {
-                this.Database.Transaction.Rollback();
-                throw;
-            }
+
+            return false;   
         }
     }
 }

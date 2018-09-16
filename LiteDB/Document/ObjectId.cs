@@ -1,16 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Formatters.Binary;
 using System.Security;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace LiteDB
@@ -105,8 +96,8 @@ namespace LiteDB
         /// </summary>
         public ObjectId(byte[] bytes)
         {
-            if (bytes == null) throw new ArgumentNullException("bytes");
-            if (bytes.Length != 12) throw new ArgumentException("bytes", "Byte array must be 12 bytes long");
+            if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+            if (bytes.Length != 12) throw new ArgumentException(nameof(bytes), "Byte array must be 12 bytes long");
 
             this.Timestamp = (bytes[0] << 24) + (bytes[1] << 16) + (bytes[2] << 8) + bytes[3];
             this.Machine = (bytes[4] << 16) + (bytes[5] << 8) + bytes[6];
@@ -119,7 +110,7 @@ namespace LiteDB
         /// </summary>
         private static byte[] FromHex(string value)
         {
-            if (string.IsNullOrEmpty(value)) throw new ArgumentNullException("val");
+            if (string.IsNullOrEmpty(value)) throw new ArgumentNullException(nameof(value));
             if (value.Length != 24) throw new ArgumentException(string.Format("ObjectId strings should be 24 hex characters, got {0} : \"{1}\"", value.Length, value));
 
             var bytes = new byte[12];
@@ -137,11 +128,13 @@ namespace LiteDB
         #region Equals/CompareTo/ToString
 
         /// <summary>
-        /// Equalses the specified other.
+        /// Checks if this ObjectId is equal to the given object. Returns true
+        /// if the given object is equal to the value of this instance. 
+        /// Returns false otherwise.
         /// </summary>
         public bool Equals(ObjectId other)
         {
-            return
+            return other != null && 
                 this.Timestamp == other.Timestamp &&
                 this.Machine == other.Machine &&
                 this.Pid == other.Pid &&
@@ -153,12 +146,7 @@ namespace LiteDB
         /// </summary>
         public override bool Equals(object other)
         {
-            if (other is ObjectId)
-            {
-                return this.Equals((ObjectId)other);
-            }
-
-            return false;
+            return Equals(other as ObjectId);
         }
 
         /// <summary>
@@ -186,7 +174,7 @@ namespace LiteDB
             if (r != 0) return r;
 
             r = this.Pid.CompareTo(other.Pid);
-            if (r != 0) return r;
+            if (r != 0) return r < 0 ? -1 : 1;
 
             return this.Increment.CompareTo(other.Increment);
         }
@@ -267,7 +255,13 @@ namespace LiteDB
         // static constructor
         static ObjectId()
         {
-            _machine = (GetMachineHash() + AppDomain.CurrentDomain.Id) & 0x00ffffff;
+            _machine = (GetMachineHash() +
+#if HAVE_APP_DOMAIN
+                AppDomain.CurrentDomain.Id
+#else
+                10000 // Magic number
+#endif   
+                ) & 0x00ffffff;
             _increment = (new Random()).Next();
 
             try
@@ -283,12 +277,21 @@ namespace LiteDB
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static int GetCurrentProcessId()
         {
+#if HAVE_PROCESS
             return Process.GetCurrentProcess().Id;
+#else
+            return 1000; // Magic number
+#endif
         }
 
         private static int GetMachineHash()
         {
-            var hostName = Environment.MachineName; // use instead of Dns.HostName so it will work offline
+            var hostName =
+#if HAVE_ENVIRONMENT
+                Environment.MachineName; // use instead of Dns.HostName so it will work offline
+#else
+                "SOMENAME";
+#endif
             return 0x00ffffff & hostName.GetHashCode(); // use first 3 bytes of hash
         }
 

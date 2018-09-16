@@ -1,44 +1,44 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.IO;
-using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Spool : ConsoleCommand
+    [Help(
+        Category = "Shell",
+        Name = "spool",
+        Syntax = "spool [off]",
+        Description = "Starts spool all output to a disk file. Use off keyword to stop."
+    )]
+    internal class Spool : IShellCommand
     {
         private TextWriter _writer;
 
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
             return s.Scan(@"spo(ol)?\s*").Length > 0;
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            if(s.Scan("false|off").Length > 0 && _writer != null)
+            if (s.Scan("false|off").Length > 0 && _writer != null)
             {
-                display.TextWriters.Remove(_writer);
-                input.OnWrite = null;
+                env.Display.TextWriters.Remove(_writer);
+                env.Input.OnWrite = null;
                 _writer.Flush();
                 _writer.Dispose();
                 _writer = null;
             }
-            else if(_writer == null)
+            else if (_writer == null)
             {
-                if (shell.Database == null) throw LiteException.NoDatabase();
+                if (env.Engine == null) throw ShellException.NoDatabase();
 
-                var dbfilename = shell.Database.ConnectionString.Filename;
-                var path = Path.Combine(Path.GetDirectoryName(dbfilename),
-                    string.Format("{0}-spool-{1:yyyy-MM-dd-HH-mm}.txt", Path.GetFileNameWithoutExtension(dbfilename), DateTime.Now));
+                var path = Path.GetFullPath(string.Format("LiteDB-spool-{0:yyyy-MM-dd-HH-mm}.txt", DateTime.Now));
 
                 _writer = File.CreateText(path);
 
-                display.TextWriters.Add(_writer);
+                env.Display.TextWriters.Add(_writer);
 
-                input.OnWrite = (t) => _writer.Write(t);
+                env.Input.OnWrite = (t) => _writer.Write(t);
             }
         }
     }

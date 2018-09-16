@@ -1,12 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Linq.Expressions;
-using System.Runtime.Serialization.Formatters.Binary;
 using System.Text;
-using System.Text.RegularExpressions;
 
 namespace LiteDB
 {
@@ -42,6 +37,11 @@ namespace LiteDB
         /// </summary>
         public virtual object RawValue { get; private set; }
 
+        /// <summary>
+        /// Internal destroy method. Works only when used with BsonExpression
+        /// </summary>
+        internal Action Destroy = () => { };
+
         #region Constructor
 
         public BsonValue()
@@ -68,6 +68,12 @@ namespace LiteDB
             this.RawValue = value;
         }
 
+        public BsonValue(Decimal value)
+        {
+            this.Type = BsonType.Decimal;
+            this.RawValue = value;
+        }
+
         public BsonValue(String value)
         {
             this.Type = value == null ? BsonType.Null : BsonType.String;
@@ -76,25 +82,25 @@ namespace LiteDB
 
         public BsonValue(Dictionary<string, BsonValue> value)
         {
-            this.Type = BsonType.Document;
+            this.Type = value == null ? BsonType.Null : BsonType.Document;
             this.RawValue = value;
         }
 
         public BsonValue(List<BsonValue> value)
         {
-            this.Type = BsonType.Array;
+            this.Type = value == null ? BsonType.Null : BsonType.Array;
             this.RawValue = value;
         }
 
         public BsonValue(Byte[] value)
         {
-            this.Type = BsonType.Binary;
+            this.Type = value == null ? BsonType.Null : BsonType.Binary;
             this.RawValue = value;
         }
 
         public BsonValue(ObjectId value)
         {
-            this.Type = BsonType.ObjectId;
+            this.Type = value == null ? BsonType.Null : BsonType.ObjectId;
             this.RawValue = value;
         }
 
@@ -113,12 +119,12 @@ namespace LiteDB
         public BsonValue(DateTime value)
         {
             this.Type = BsonType.DateTime;
-            this.RawValue = value;
+            this.RawValue = value.Truncate();
         }
 
         public BsonValue(BsonValue value)
         {
-            this.Type = value.Type;
+            this.Type = value == null ? BsonType.Null : value.Type;
             this.RawValue = value.RawValue;
         }
 
@@ -127,31 +133,64 @@ namespace LiteDB
             this.RawValue = value;
 
             if (value == null) this.Type = BsonType.Null;
-
             else if (value is Int32) this.Type = BsonType.Int32;
             else if (value is Int64) this.Type = BsonType.Int64;
             else if (value is Double) this.Type = BsonType.Double;
-
+            else if (value is Decimal) this.Type = BsonType.Decimal;
             else if (value is String) this.Type = BsonType.String;
-
             else if (value is Dictionary<string, BsonValue>) this.Type = BsonType.Document;
             else if (value is List<BsonValue>) this.Type = BsonType.Array;
-
             else if (value is Byte[]) this.Type = BsonType.Binary;
             else if (value is ObjectId) this.Type = BsonType.ObjectId;
             else if (value is Guid) this.Type = BsonType.Guid;
-
             else if (value is Boolean) this.Type = BsonType.Boolean;
-            else if (value is DateTime) this.Type = BsonType.DateTime;
-
+            else if (value is DateTime)
+            {
+                this.Type = BsonType.DateTime;
+                this.RawValue = ((DateTime)value).Truncate();
+            }
             else if (value is BsonValue)
             {
                 var v = (BsonValue)value;
                 this.Type = v.Type;
                 this.RawValue = v.RawValue;
             }
+            else
+            {
+                // test for array or dictionary (document)
+                var enumerable = value as System.Collections.IEnumerable;
+                var dictionary = value as System.Collections.IDictionary;
 
-            else throw new InvalidCastException("Value is not a valid BSON data type - Use Mapper.ToDocument for more complex types converts");
+                // test first for dictionary (because IDictionary implements IEnumerable)
+                if (dictionary != null)
+                {
+                    var dict = new Dictionary<string, BsonValue>();
+
+                    foreach (var key in dictionary.Keys)
+                    {
+                        dict.Add(key.ToString(), new BsonValue(dictionary[key]));
+                    }
+
+                    this.Type = BsonType.Document;
+                    this.RawValue = dict;
+                }
+                else if (enumerable != null)
+                {
+                    var list = new List<BsonValue>();
+
+                    foreach (var x in enumerable)
+                    {
+                        list.Add(new BsonValue(x));
+                    }
+
+                    this.Type = BsonType.Array;
+                    this.RawValue = list;
+                }
+                else
+                {
+                    throw new InvalidCastException("Value is not a valid BSON data type - Use Mapper.ToDocument for more complex types converts");
+                }
+            }
         }
 
         #endregion
@@ -160,11 +199,15 @@ namespace LiteDB
 
         public BsonArray AsArray
         {
-            get 
+            get
             {
                 if (this.IsArray)
                 {
-                    return new BsonArray((List<BsonValue>)this.RawValue);
+                    var array = new BsonArray((List<BsonValue>)this.RawValue);
+                    array.Length = this.Length;
+                    array.Destroy = this.Destroy;
+
+                    return array;
                 }
                 else
                 {
@@ -179,7 +222,11 @@ namespace LiteDB
             {
                 if (this.IsDocument)
                 {
-                    return new BsonDocument((Dictionary<string, BsonValue>)this.RawValue);
+                    var doc = new BsonDocument((Dictionary<string, BsonValue>)this.RawValue);
+                    doc.Length = this.Length;
+                    doc.Destroy = this.Destroy;
+
+                    return doc;
                 }
                 else
                 {
@@ -216,6 +263,11 @@ namespace LiteDB
         public double AsDouble
         {
             get { return this.IsNumber ? Convert.ToDouble(this.RawValue) : default(Double); }
+        }
+
+        public decimal AsDecimal
+        {
+            get { return this.IsNumber ? Convert.ToDecimal(this.RawValue) : default(Decimal); }
         }
 
         public DateTime AsDateTime
@@ -267,9 +319,14 @@ namespace LiteDB
             get { return this.Type == BsonType.Double; }
         }
 
+        public bool IsDecimal
+        {
+            get { return this.Type == BsonType.Decimal; }
+        }
+
         public bool IsNumber
         {
-            get { return this.IsInt32 || this.IsInt64 || this.IsDouble; }
+            get { return this.IsInt32 || this.IsInt64 || this.IsDouble || this.IsDecimal; }
         }
 
         public bool IsBinary
@@ -325,7 +382,7 @@ namespace LiteDB
         // Int32
         public static implicit operator BsonValue(Int32 value)
         {
-            return new BsonValue { Type = BsonType.Int32, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Int64
@@ -337,7 +394,7 @@ namespace LiteDB
         // Int64
         public static implicit operator BsonValue(Int64 value)
         {
-            return new BsonValue { Type = BsonType.Int64, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Double
@@ -349,7 +406,31 @@ namespace LiteDB
         // Double
         public static implicit operator BsonValue(Double value)
         {
-            return new BsonValue { Type = BsonType.Double, RawValue = value };
+            return new BsonValue(value);
+        }
+
+        // Decimal
+        public static implicit operator Decimal(BsonValue value)
+        {
+            return (Decimal)value.RawValue;
+        }
+
+        // Decimal
+        public static implicit operator BsonValue(Decimal value)
+        {
+            return new BsonValue(value);
+        }
+
+        // UInt64 (to avoid ambigous between Double-Decimal)
+        public static implicit operator UInt64(BsonValue value)
+        {
+            return (UInt64)value.RawValue;
+        }
+
+        // Decimal
+        public static implicit operator BsonValue(UInt64 value)
+        {
+            return new BsonValue((Double)value);
         }
 
         // String
@@ -361,7 +442,7 @@ namespace LiteDB
         // String
         public static implicit operator BsonValue(String value)
         {
-            return new BsonValue { Type = BsonType.String, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Document
@@ -373,7 +454,7 @@ namespace LiteDB
         // Document
         public static implicit operator BsonValue(Dictionary<string, BsonValue> value)
         {
-            return new BsonValue { Type = BsonType.Document, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Array
@@ -385,11 +466,11 @@ namespace LiteDB
         // Array
         public static implicit operator BsonValue(List<BsonValue> value)
         {
-            return new BsonValue { Type = BsonType.Array, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Binary
-        public static implicit operator Byte[](BsonValue value)
+        public static implicit operator Byte[] (BsonValue value)
         {
             return (Byte[])value.RawValue;
         }
@@ -397,7 +478,7 @@ namespace LiteDB
         // Binary
         public static implicit operator BsonValue(Byte[] value)
         {
-            return new BsonValue { Type = BsonType.Binary, RawValue = value };
+            return new BsonValue(value);
         }
 
         // ObjectId
@@ -409,7 +490,7 @@ namespace LiteDB
         // ObjectId
         public static implicit operator BsonValue(ObjectId value)
         {
-            return new BsonValue { Type = BsonType.ObjectId, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Guid
@@ -421,7 +502,7 @@ namespace LiteDB
         // Guid
         public static implicit operator BsonValue(Guid value)
         {
-            return new BsonValue { Type = BsonType.Guid, RawValue = value };
+            return new BsonValue(value);
         }
 
         // Boolean
@@ -433,7 +514,7 @@ namespace LiteDB
         // Boolean
         public static implicit operator BsonValue(Boolean value)
         {
-            return new BsonValue { Type = BsonType.Boolean, RawValue = value };
+            return new BsonValue(value);
         }
 
         // DateTime
@@ -445,12 +526,78 @@ namespace LiteDB
         // DateTime
         public static implicit operator BsonValue(DateTime value)
         {
-            return new BsonValue { Type = BsonType.DateTime, RawValue = value };
+            return new BsonValue(value);
+        }
+
+        // +
+        public static BsonValue operator +(BsonValue left, BsonValue right)
+        {
+            if (!left.IsNumber || !right.IsNumber) return BsonValue.Null;
+
+            if (left.IsInt32 && right.IsInt32) return left.AsInt32 + right.AsInt32;
+            if (left.IsInt64 && right.IsInt64) return left.AsInt64 + right.AsInt64;
+            if (left.IsDouble && right.IsDouble) return left.AsDouble + right.AsDouble;
+            if (left.IsDecimal && right.IsDecimal) return left.AsDecimal + right.AsDecimal;
+
+            var result = left.AsDecimal + right.AsDecimal;
+            var type = (BsonType)Math.Max((int)left.Type, (int)right.Type);
+
+            return
+                type == BsonType.Int64 ? new BsonValue((Int64)result) :
+                type == BsonType.Double ? new BsonValue((Double)result) :
+                new BsonValue(result);
+        }
+
+        // -
+        public static BsonValue operator -(BsonValue left, BsonValue right)
+        {
+            if (!left.IsNumber || !right.IsNumber) return BsonValue.Null;
+
+            if (left.IsInt32 && right.IsInt32) return left.AsInt32 - right.AsInt32;
+            if (left.IsInt64 && right.IsInt64) return left.AsInt64 - right.AsInt64;
+            if (left.IsDouble && right.IsDouble) return left.AsDouble - right.AsDouble;
+            if (left.IsDecimal && right.IsDecimal) return left.AsDecimal - right.AsDecimal;
+
+            var result = left.AsDecimal - right.AsDecimal;
+            var type = (BsonType)Math.Max((int)left.Type, (int)right.Type);
+
+            return
+                type == BsonType.Int64 ? new BsonValue((Int64)result) :
+                type == BsonType.Double ? new BsonValue((Double)result) :
+                new BsonValue(result);
+        }
+
+        // *
+        public static BsonValue operator *(BsonValue left, BsonValue right)
+        {
+            if (!left.IsNumber || !right.IsNumber) return BsonValue.Null;
+
+            if (left.IsInt32 && right.IsInt32) return left.AsInt32 * right.AsInt32;
+            if (left.IsInt64 && right.IsInt64) return left.AsInt64 * right.AsInt64;
+            if (left.IsDouble && right.IsDouble) return left.AsDouble * right.AsDouble;
+            if (left.IsDecimal && right.IsDecimal) return left.AsDecimal * right.AsDecimal;
+
+            var result = left.AsDecimal * right.AsDecimal;
+            var type = (BsonType)Math.Max((int)left.Type, (int)right.Type);
+
+            return
+                type == BsonType.Int64 ? new BsonValue((Int64)result) :
+                type == BsonType.Double ? new BsonValue((Double)result) :
+                new BsonValue(result);
+        }
+
+        // /
+        public static BsonValue operator /(BsonValue left, BsonValue right)
+        {
+            if (!left.IsNumber || !right.IsNumber) return BsonValue.Null;
+            if (left.IsDecimal || right.IsDecimal) return left.AsDecimal / right.AsDecimal;
+
+            return left.AsDouble / right.AsDouble;
         }
 
         public override string ToString()
         {
-            return this.IsNull ? "(null)" : this.RawValue.ToString();
+            return JsonSerializer.Serialize(this);
         }
 
         #endregion
@@ -459,13 +606,14 @@ namespace LiteDB
 
         public virtual int CompareTo(BsonValue other)
         {
-            // first, test if types are diferentes
+            // first, test if types are different
             if (this.Type != other.Type)
             {
-                // if both values are number, convert them to Double to compare
+                // if both values are number, convert them to Decimal (128 bits) to compare
+                // it's the slowest way, but more secure
                 if (this.IsNumber && other.IsNumber)
                 {
-                    return Convert.ToDouble(this.RawValue).CompareTo(Convert.ToDouble(this.RawValue));
+                    return Convert.ToDecimal(this.RawValue).CompareTo(Convert.ToDecimal(other.RawValue));
                 }
                 // if not, order by sort type order
                 else
@@ -474,10 +622,10 @@ namespace LiteDB
                 }
             }
 
-            // for both values with same datatype just compare
+            // for both values with same data type just compare
             switch (this.Type)
             {
-                case BsonType.Null: 
+                case BsonType.Null:
                 case BsonType.MinValue:
                 case BsonType.MaxValue:
                     return 0;
@@ -485,6 +633,7 @@ namespace LiteDB
                 case BsonType.Int32: return ((Int32)this.RawValue).CompareTo((Int32)other.RawValue);
                 case BsonType.Int64: return ((Int64)this.RawValue).CompareTo((Int64)other.RawValue);
                 case BsonType.Double: return ((Double)this.RawValue).CompareTo((Double)other.RawValue);
+                case BsonType.Decimal: return ((Decimal)this.RawValue).CompareTo((Decimal)other.RawValue);
 
                 case BsonType.String: return string.Compare((String)this.RawValue, (String)other.RawValue);
 
@@ -496,7 +645,12 @@ namespace LiteDB
                 case BsonType.Guid: return ((Guid)this.RawValue).CompareTo((Guid)other.RawValue);
 
                 case BsonType.Boolean: return ((Boolean)this.RawValue).CompareTo((Boolean)other.RawValue);
-                case BsonType.DateTime: return ((DateTime)this.RawValue).CompareTo((DateTime)other.RawValue);
+                case BsonType.DateTime:
+                    var d0 = (DateTime)this.RawValue;
+                    var d1 = (DateTime)other.RawValue;
+                    if (d0.Kind != DateTimeKind.Utc) d0 = d0.ToUniversalTime();
+                    if (d1.Kind != DateTimeKind.Utc) d1 = d1.ToUniversalTime();
+                    return d0.CompareTo(d1);
 
                 default: throw new NotImplementedException();
             }
@@ -559,109 +713,71 @@ namespace LiteDB
 
         #endregion
 
-        #region GetBytesLength, Normalize
+        #region GetBytesCount
+
+        internal int? Length = null;
 
         /// <summary>
         /// Returns how many bytes this BsonValue will use to persist in index writes
         /// </summary>
-        internal ushort GetBytesCount()
+        public int GetBytesCount(bool recalc)
         {
-            var length = 0;
+            if (recalc == false && this.Length.HasValue) return this.Length.Value;
 
             switch (this.Type)
             {
                 case BsonType.Null:
                 case BsonType.MinValue:
                 case BsonType.MaxValue:
-                    length = 0; break;
+                    this.Length = 0; break;
 
-                case BsonType.Int32: length = 4; break;
-                case BsonType.Int64: length = 8; break;
-                case BsonType.Double: length = 8; break;
+                case BsonType.Int32: this.Length = 4; break;
+                case BsonType.Int64: this.Length = 8; break;
+                case BsonType.Double: this.Length = 8; break;
+                case BsonType.Decimal: this.Length = 16; break;
 
-                case BsonType.String: length = Encoding.UTF8.GetByteCount((string)this.RawValue); break;
+                case BsonType.String: this.Length = Encoding.UTF8.GetByteCount((string)this.RawValue); break;
 
-                case BsonType.Binary: length = ((Byte[])this.RawValue).Length; break;
-                case BsonType.ObjectId: length = 12; break;
-                case BsonType.Guid: length = 16; break;
+                case BsonType.Binary: this.Length = ((Byte[])this.RawValue).Length; break;
+                case BsonType.ObjectId: this.Length = 12; break;
+                case BsonType.Guid: this.Length = 16; break;
 
-                case BsonType.Boolean: length = 1; break;
-                case BsonType.DateTime: length = 8; break;
+                case BsonType.Boolean: this.Length = 1; break;
+                case BsonType.DateTime: this.Length = 8; break;
 
-                // for Array/Document use BsonWriter
+                // for Array/Document calculate from elements
                 case BsonType.Array:
-                    using(var ma = new MemoryStream())
+                    var array = (List<BsonValue>)this.RawValue;
+                    this.Length = 5; // header + footer
+                    for (var i = 0; i < array.Count; i++)
                     {
-                        using (var w = new BinaryWriter(ma))
-                        {
-                            new BsonWriter()
-                                .WriteArray(w, this.AsArray);
-
-                            length = (int)ma.Position;
-                        }
+                        this.Length += this.GetBytesCountElement(i.ToString(), array[i] ?? BsonValue.Null, recalc);
                     }
                     break;
-                case BsonType.Document:
-                    using(var md = new MemoryStream())
-                    {
-                        using (var w = new BinaryWriter(md))
-                        {
-                            new BsonWriter()
-                                .WriteDocument(w, this.AsDocument);
 
-                            length = (int)md.Position;
-                        }
+                case BsonType.Document:
+                    var doc = (Dictionary<string, BsonValue>)this.RawValue;
+                    this.Length = 5; // header + footer
+                    foreach (var key in doc.Keys)
+                    {
+                        this.Length += this.GetBytesCountElement(key, doc[key] ?? BsonValue.Null, recalc);
                     }
                     break;
             }
 
-            // limits in ushort.MaxValue (store in 2 bytes only)
-            return (ushort)Math.Min(length, ushort.MaxValue);
+            return this.Length.Value;
         }
 
-        /// <summary>
-        /// Normalize a string value using IndexOptions and returns a new BsonValue - if is not a string, returns some BsonValue instance
-        /// </summary>
-        internal BsonValue Normalize(IndexOptions options)
+        private int GetBytesCountElement(string key, BsonValue value, bool recalc)
         {
-            // if not string, do nothing
-            if (this.Type != BsonType.String) return this;
-
-            // removing whitespaces
-            var text = (String)RawValue;
-
-            if (options.TrimWhitespace) text = text.Trim();
-            if (options.IgnoreCase) text = text.ToLower();
-            
-            // convert emptystring to null
-            if (text.Length == 0 && options.EmptyStringToNull)
-            {
-                return BsonValue.Null;
-            }
-
-            if (!options.RemoveAccents)
-            {
-                return text;
-            }
-
-            // removing accents
-            var normalized = text.Normalize(NormalizationForm.FormD);
-            var sb = new StringBuilder();
-
-            for (int i = 0; i < normalized.Length; i++)
-            {
-                var c = normalized[i];
-
-                if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
-                {
-                    sb.Append(c);
-                }
-            }
-
-            return sb.ToString();
+            return
+                1 + // element type
+                Encoding.UTF8.GetByteCount(key) + // CString
+                1 + // CString 0x00
+                value.GetBytesCount(recalc) +
+                (value.Type == BsonType.String || value.Type == BsonType.Binary || value.Type == BsonType.Guid ? 5 : 0); // bytes.Length + 0x??
         }
 
         #endregion
-
     }
 }

@@ -1,21 +1,24 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Quit : ConsoleCommand
+    [Help(
+        Category = "Shell",
+        Name = "quit",
+        Syntax = "quit|exit",
+        Description = "Close shell application"
+    )]
+    internal class Quit : IShellCommand
     {
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
             return s.Match(@"(quit|exit)$");
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            Environment.Exit(0);
+            env.Close();
+            env.Input.Running = false;
         }
     }
 }

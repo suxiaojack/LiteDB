@@ -1,26 +1,25 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Version : ConsoleCommand
+    [Help(
+        Category = "Shell",
+        Name = "version",
+        Syntax = "ver",
+        Description = "Show LiteDB version"
+    )]
+    internal class Version : IShellCommand
     {
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
-            return s.Match(@"ver(sion)?$");
+            return s.Scan(@"ver(sion)?$").Length > 0;
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            var ver = typeof(LiteDatabase).Assembly.GetName().Version;
+            var assembly = typeof(LiteDatabase).Assembly.GetName();
 
-            display.WriteInfo(string.Format("v{0}.{1}.{2}", 
-                ver.Major,
-                ver.Minor,
-                ver.Build));
+            env.Display.WriteLine(assembly.FullName);
         }
     }
 }

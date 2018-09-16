@@ -2,75 +2,113 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace LiteDB
 {
     /// <summary>
-    /// The LiteDB database. Used for create a LiteDB instance and use all storage resoures. It's the database connection
+    /// The LiteDB database. Used for create a LiteDB instance and use all storage resources. It's the database connection
     /// </summary>
     public partial class LiteDatabase : IDisposable
     {
-        #region Properties + Ctor
+        #region Properties
 
-        public ConnectionString ConnectionString { get; private set; }
-
-        internal RecoveryService Recovery { get; private set; }
-
-        internal CacheService Cache { get; private set; }
-
-        internal DiskService Disk { get; private set; }
-
-        internal PageService Pager { get; private set; }
-
-        internal JournalService Journal { get; private set; }
-
-        internal TransactionService Transaction { get; private set; }
-
-        internal IndexService Indexer { get; private set; }
-
-        internal DataService Data { get; private set; }
-
-        internal CollectionService Collections { get; private set; }
-
-        public BsonMapper Mapper { get; set; }
+        private LazyLoad<LiteEngine> _engine = null;
+        private BsonMapper _mapper = BsonMapper.Global;
+        private Logger _log = null;
+        private ConnectionString _connectionString = null;
 
         /// <summary>
-        /// Starts LiteDB database. Open database file or create a new one if not exits
+        /// Get logger class instance
         /// </summary>
-        /// <param name="connectionString">Full filename or connection string</param>
-        public LiteDatabase(string connectionString)
-        {
-            this.ConnectionString = new ConnectionString(connectionString);
+        public Logger Log { get { return _log; } }
 
-            if (!File.Exists(this.ConnectionString.Filename))
+        /// <summary>
+        /// Get current instance of BsonMapper used in this database instance (can be BsonMapper.Global)
+        /// </summary>
+        public BsonMapper Mapper { get { return _mapper; } }
+
+        /// <summary>
+        /// Get current database engine instance. Engine is lower data layer that works with BsonDocuments only (no mapper, no LINQ)
+        /// </summary>
+        public LiteEngine Engine { get { return _engine.Value; } }
+
+        #endregion
+
+        #region Ctor
+
+        /// <summary>
+        /// Starts LiteDB database using a connection string for file system database
+        /// </summary>
+        public LiteDatabase(string connectionString, BsonMapper mapper = null, Logger log = null)
+            : this(new ConnectionString(connectionString), mapper, log)
+        {
+        }
+
+        /// <summary>
+        /// Starts LiteDB database using a connection string for file system database
+        /// </summary>
+        public LiteDatabase(ConnectionString connectionString, BsonMapper mapper = null, Logger log = null)
+        {
+            if (connectionString == null) throw new ArgumentNullException(nameof(connectionString));
+
+            _connectionString = connectionString;
+            _log = log ?? new Logger();
+            _log.Level = log?.Level ?? _connectionString.Log;
+
+            if (_connectionString.Upgrade)
             {
-                DiskService.CreateNewDatafile(this.ConnectionString);
+                LiteEngine.Upgrade(_connectionString.Filename, _connectionString.Password);
             }
 
-            this.Mapper = BsonMapper.Global;
+            _mapper = mapper ?? BsonMapper.Global;
 
-            this.Recovery = new RecoveryService(this.ConnectionString);
+            var options = new FileOptions
+            {
+#if HAVE_SYNC_OVER_ASYNC
+                Async = _connectionString.Async,
+#endif
+#if HAVE_FLUSH_DISK
+                Flush = _connectionString.Flush,
+#endif
+                InitialSize = _connectionString.InitialSize,
+                LimitSize = _connectionString.LimitSize,
+                Journal = _connectionString.Journal,
+                FileMode = _connectionString.Mode
+            };
 
-            this.Recovery.TryRecovery();
+            _engine = new LazyLoad<LiteEngine>(() => new LiteEngine(new FileDiskService(_connectionString.Filename, options), _connectionString.Password, _connectionString.Timeout, _connectionString.CacheSize, _log, _connectionString.UtcDate));
+        }
 
-            this.Disk = new DiskService(this.ConnectionString);
+        /// <summary>
+        /// Starts LiteDB database using a Stream disk
+        /// </summary>
+        public LiteDatabase(Stream stream, BsonMapper mapper = null, string password = null, bool disposeStream = false)
+        {
+            if (stream == null) throw new ArgumentNullException(nameof(stream));
 
-            this.Cache = new CacheService(this.Disk);
+            _mapper = mapper ?? BsonMapper.Global;
+            _log = new Logger();
 
-            this.Pager = new PageService(this.Disk, this.Cache);
+            _engine = new LazyLoad<LiteEngine>(() => new LiteEngine(new StreamDiskService(stream, disposeStream), password: password, log: _log));
+        }
 
-            this.Journal = new JournalService(this.ConnectionString, this.Cache);
+        /// <summary>
+        /// Starts LiteDB database using a custom IDiskService with all parameters available
+        /// </summary>
+        /// <param name="diskService">Custom implementation of persist data layer</param>
+        /// <param name="mapper">Instance of BsonMapper that map poco classes to document</param>
+        /// <param name="password">Password to encrypt you datafile</param>
+        /// <param name="timeout">Locker timeout for concurrent access</param>
+        /// <param name="cacheSize">Max memory pages used before flush data in Journal file (when available)</param>
+        /// <param name="log">Custom log implementation</param>
+        public LiteDatabase(IDiskService diskService, BsonMapper mapper = null, string password = null, TimeSpan? timeout = null, int cacheSize = 5000, Logger log = null)
+        {
+            if (diskService == null) throw new ArgumentNullException(nameof(diskService));
 
-            this.Indexer = new IndexService(this.Cache, this.Pager);
+            _mapper = mapper ?? BsonMapper.Global;
+            _log = log ?? new Logger();
 
-            this.Transaction = new TransactionService(this.Disk, this.Cache, this.Journal);
-
-            this.Data = new DataService(this.Disk, this.Cache, this.Pager);
-
-            this.Collections = new CollectionService(this.Cache, this.Pager, this.Indexer, this.Data);
-
-            this.UpdateDatabaseVersion();
+            _engine = new LazyLoad<LiteEngine>(() => new LiteEngine(diskService, password: password, timeout: timeout, cacheSize: cacheSize, log: _log ));
         }
 
         #endregion
@@ -82,9 +120,16 @@ namespace LiteDB
         /// </summary>
         /// <param name="name">Collection name (case insensitive)</param>
         public LiteCollection<T> GetCollection<T>(string name)
-            where T : new()
         {
-            return new LiteCollection<T>(this, name);
+            return new LiteCollection<T>(name, _engine, _mapper, _log);
+        }
+
+        /// <summary>
+        /// Get a collection using a name based on typeof(T).Name (BsonMapper.ResolveCollectionName function)
+        /// </summary>
+        public LiteCollection<T> GetCollection<T>()
+        {
+            return this.GetCollection<T>(null);
         }
 
         /// <summary>
@@ -93,27 +138,45 @@ namespace LiteDB
         /// <param name="name">Collection name (case insensitive)</param>
         public LiteCollection<BsonDocument> GetCollection(string name)
         {
-            return new LiteCollection<BsonDocument>(this, name);
+            if (name.IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
+
+            return new LiteCollection<BsonDocument>(name, _engine, _mapper, _log);
         }
+
+        #endregion
+
+        #region FileStorage
+
+        private LiteStorage _fs = null;
+
+        /// <summary>
+        /// Returns a special collection for storage files/stream inside datafile
+        /// </summary>
+        public LiteStorage FileStorage
+        {
+            get { return _fs ?? (_fs = new LiteStorage(_engine.Value)); }
+        }
+
+        #endregion
+
+        #region Shortcut
 
         /// <summary>
         /// Get all collections name inside this database.
         /// </summary>
         public IEnumerable<string> GetCollectionNames()
         {
-            this.Transaction.AvoidDirtyRead();
-
-            return this.Collections.GetAll().Select(x => x.CollectionName);
+            return _engine.Value.GetCollectionNames();
         }
 
         /// <summary>
-        /// Checks if a collection exists on database. Collection name is case unsensitive
+        /// Checks if a collection exists on database. Collection name is case insensitive
         /// </summary>
         public bool CollectionExists(string name)
         {
-            this.Transaction.AvoidDirtyRead();
+            if (name.IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
 
-            return this.Collections.Get(name) != null;
+            return _engine.Value.GetCollectionNames().Contains(name, StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -121,7 +184,9 @@ namespace LiteDB
         /// </summary>
         public bool DropCollection(string name)
         {
-            return this.GetCollection(name).Drop();
+            if (name.IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(name));
+
+            return _engine.Value.DropCollection(name);
         }
 
         /// <summary>
@@ -129,82 +194,62 @@ namespace LiteDB
         /// </summary>
         public bool RenameCollection(string oldName, string newName)
         {
-            this.Transaction.Begin();
+            if (oldName.IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(oldName));
+            if (newName.IsNullOrWhiteSpace()) throw new ArgumentNullException(nameof(newName));
 
-            try
+            return _engine.Value.RenameCollection(oldName, newName);
+        }
+
+        #endregion
+
+        #region Shrink
+
+        /// <summary>
+        /// Reduce disk size re-arranging unused spaces.
+        /// </summary>
+        public long Shrink()
+        {
+            return this.Shrink(_connectionString?.Password);
+        }
+
+        /// <summary>
+        /// Reduce disk size re-arranging unused space. Can change password. If a temporary disk was not provided, use MemoryStream temp disk
+        /// </summary>
+        public long Shrink(string password)
+        {
+            // if has connection string, use same path
+            if (_connectionString != null)
             {
-                var col = this.Collections.Get(oldName);
+                // get temp file ("-temp" suffix)
+                var tempFile = FileHelper.GetTempFile(_connectionString.Filename);
+                var reduced = 0L;
 
-                if (col == null || this.CollectionExists(newName))
+                try
                 {
-                    this.Transaction.Abort();
-                    return false;
+                    // get temp disk based on temp file
+                    var tempDisk = new FileDiskService(tempFile, new FileOptions { Journal = false, FileMode = FileMode.Exclusive });
+
+                    reduced = _engine.Value.Shrink(password, tempDisk);
+                }
+                finally
+                {
+                    // delete temp file
+                    File.Delete(tempFile);
                 }
 
-                col.CollectionName = newName;
-                col.IsDirty = true;
-
-                this.Transaction.Commit();
+                return reduced;
             }
-            catch
+            else
             {
-                this.Transaction.Rollback();
-                throw;
+                return _engine.Value.Shrink(password);
             }
-
-            return true;
-        }
-
-        #endregion
-
-        #region FileStorage
-
-        private LiteFileStorage _fs = null;
-
-        /// <summary>
-        /// Returns a special collection for storage files/stream inside datafile
-        /// </summary>
-        public LiteFileStorage FileStorage
-        {
-            get { return _fs ?? (_fs = new LiteFileStorage(this)); }
-        }
-
-        #endregion
-
-        #region Transaction
-
-        /// <summary>
-        /// Starts a new transaction. After this command, all write operations will be first in memory and will persist on disk
-        /// only when call Commit() method. If any error occurs, a Rollback() method will run.
-        /// </summary>
-        public void BeginTrans()
-        {
-            this.Transaction.Begin();
-        }
-
-        /// <summary>
-        /// Persist all changes on disk. Always use this method to finish your changes on database
-        /// </summary>
-        public void Commit()
-        {
-            this.Transaction.Commit();
-        }
-
-        /// <summary>
-        /// Cancel all write operations and keep datafile as is before BeginTrans() called.
-        /// Rollback are implicit on a database operation error, so you do not need call for database errors (only on business rules).
-        /// </summary>
-        public void Rollback()
-        {
-            this.Transaction.Rollback();
         }
 
         #endregion
 
         public void Dispose()
         {
-            this.Disk.Dispose();
-            this.Cache.Dispose();
+            if (_engine.IsValueCreated) _engine.Value.Dispose();
         }
     }
 }

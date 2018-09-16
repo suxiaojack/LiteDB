@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Text;
 
 namespace LiteDB
 {
@@ -11,9 +9,11 @@ namespace LiteDB
     /// </summary>
     internal class MimeTypeConverter
     {
-        private static IDictionary<string, string> _mappings = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase) {
+        private static IDictionary<string, string> _mappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
         #region Big freaking list of mime types
-        // combination of values from Windows 7 Registry and 
+
+        // combination of values from Windows 7 Registry and
         // from C:\Windows\System32\inetsrv\config\applicationHost.config
         // some added, including .7z and .dat
         {".323", "text/h323"},
@@ -580,7 +580,7 @@ namespace LiteDB
 
         public static string GetMimeType(string filename)
         {
-            if (string.IsNullOrEmpty(filename)) throw new ArgumentNullException("filename");
+            if (string.IsNullOrEmpty(filename)) throw new ArgumentNullException(nameof(filename));
 
             var extension = Path.GetExtension(filename);
 

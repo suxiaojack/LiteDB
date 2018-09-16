@@ -1,23 +1,23 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Text;
 
 namespace LiteDB.Shell.Commands
 {
-    internal class Timer : ConsoleCommand
+    [Help(
+        Category = "Shell",
+        Name = "timer",
+        Syntax = "timer",
+        Description = "Print millisecond counter before command. Used to test command performance."
+    )]
+    internal class Timer : IShellCommand
     {
-        public override bool IsCommand(StringScanner s)
+        public bool IsCommand(StringScanner s)
         {
             return s.Match(@"timer$");
         }
 
-        public override void Execute(LiteShell shell, StringScanner s, Display display, InputCommand input)
+        public void Execute(StringScanner s, Env env)
         {
-            input.Timer.Start();
+            env.Input.Timer.Start();
         }
     }
 }

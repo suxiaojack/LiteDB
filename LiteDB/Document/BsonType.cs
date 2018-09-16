@@ -1,18 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Linq.Expressions;
-using System.Runtime.Serialization.Formatters.Binary;
-using System.Text;
-
-namespace LiteDB
+﻿namespace LiteDB
 {
     /// <summary>
     /// All supported BsonTypes in sort order
     /// </summary>
     public enum BsonType
-    { 
+    {
         MinValue = 0,
 
         Null = 1,
@@ -20,19 +12,20 @@ namespace LiteDB
         Int32 = 2,
         Int64 = 3,
         Double = 4,
+        Decimal = 5,
 
-        String = 5,
+        String = 6,
 
-        Document = 6,
-        Array = 7,
+        Document = 7,
+        Array = 8,
 
-        Binary = 8,
-        ObjectId = 9,
-        Guid = 10,
+        Binary = 9,
+        ObjectId = 10,
+        Guid = 11,
 
-        Boolean = 11,
-        DateTime = 12,
+        Boolean = 12,
+        DateTime = 13,
 
-        MaxValue = 13
+        MaxValue = 14
     }
 }

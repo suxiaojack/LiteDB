@@ -1,61 +1,33 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Text;
-
-namespace LiteDB.Shell
+﻿namespace LiteDB.Shell
 {
-    class Program
+    internal class Program
     {
-        static void Main(string[] args)
+        /// <summary>
+        /// Opens console shell app. Usage:
+        /// LiteDB.Shell [myfile.db] --param1 value1 --params2 "value 2"
+        /// Parameters:
+        /// --exec "command"   : Execute an shell command (can be multiples --exec)
+        /// --run script.txt   : Run script commands file
+        /// --pretty           : Show JSON in multiline + indented
+        /// --exit             : Exit after last command
+        /// </summary>
+        private static void Main(string[] args)
         {
-            var shell = new LiteShell(null);
             var input = new InputCommand();
             var display = new Display();
+            var o = new OptionSet();
 
-            display.TextWriters.Add(Console.Out);
+            // default arg
+            o.Register((v) => input.Queue.Enqueue("open " + v));
+            o.Register("pretty", () => display.Pretty = true);
+            o.Register("exit", () => input.AutoExit = true);
+            o.Register<string>("run", (v) => input.Queue.Enqueue("run " + v));
+            o.Register<string>("exec", (v) => input.Queue.Enqueue(v));
 
-            // show welcome message
-            display.WriteWelcome();
+            // parse command line calling register parameters
+            o.Parse(args);
 
-            // if has a argument, its database file - try open
-            if (args.Length > 0)
-            {
-                try
-                {
-                    shell.Database = new LiteDatabase(args[0]);
-                }
-                catch (Exception ex)
-                {
-                    display.WriteError(ex.Message);
-                }
-            }
-
-            while (true)
-            {
-                // read next command from user
-                var cmd = input.ReadCommand();
-
-                if (string.IsNullOrEmpty(cmd)) continue;
-
-                try
-                {
-                    var isConsoleCommand = ConsoleCommand.TryExecute(cmd, shell, display, input);
-
-                    if (isConsoleCommand == false)
-                    {
-                        var result = shell.Run(cmd);
-
-                        display.WriteResult(result);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    display.WriteError(ex.Message);
-                }
-            }
+            ShellProgram.Start(input, display);
         }
     }
 }
